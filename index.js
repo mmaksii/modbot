@@ -290,10 +290,7 @@ client.on('messageCreate', async (message) => {
       readmessages: 'ViewChannel',
       viewchannels: 'ViewChannel',
       sendmessagesinthreads: 'SendMessagesInThreads',
-};   
-};   
-    };
-
+    };      
     const permKey = permMap[perm];
     if (!permKey) return message.reply(`❌ Unknown. Options: ${Object.keys(permMap).join(', ')}`);
 
