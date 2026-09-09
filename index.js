@@ -275,7 +275,7 @@ if (cmd === 'unsoftban') {
         { name: `,unmute @user`, value: 'Unmute', inline: true },
         { name: `,nick @user name`, value: 'Change nickname', inline: true },
         { name: `,slowmode secs`, value: 'Set slowmode', inline: true },
-        { name: `,lock` / `,unlock`, value: 'Lock/unlock channel', inline: true },
+        { name: `,lock / ,unlock`, value: 'Lock/unlock channel', inline: true },   
         { name: `,setperm @role deny/allow perm`, value: 'Bulk set permissions', inline: true },
         { name: `,userinfo [@user]`, value: 'Show user info', inline: true },
         { name: `,serverinfo`, value: 'Show server stats', inline: true },
