@@ -143,7 +143,7 @@ client.on('messageCreate', async (message) => {
   if (!message.guild) return;
 
   // Trap channel
-  if (message.channel.name === 'do-not-type-here') {
+  if (message.channel.name === '⛔︴do-not-type-here') {
     if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
       await message.delete().catch(() => {});
       try {
