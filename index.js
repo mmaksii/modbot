@@ -1,4 +1,6 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
   intents: [
@@ -17,6 +19,17 @@ const inviteCache = new Map();
 // ─── AUTO-MOD ───
 const badWords = ['badword1', 'badword2'];
 const inviteRegex = /discord(?:\.gg|app\.com\/invite)\/\w+/i;
+
+// ─── NOTES STORAGE ───
+const NOTES_FILE = path.join(__dirname, 'notes.json');
+let notes = {};
+try { notes = JSON.parse(fs.readFileSync(NOTES_FILE, 'utf8')); } catch {}
+function saveNotes() {
+  fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
+}
+
+// ─── REMINDERS ───
+const reminders = [];
 
 // ─── LOG HELPER ───
 async function logAction(guild, title, color, fields) {
@@ -117,7 +130,10 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     await interaction.member.roles.add(verifiedRole);
-    await interaction.update({ content: '✅ You are verified. Enjoy!', components: [] });
+    await logAction(interaction.guild, 'User Verified', 0x1e1e2e, [
+      { name: 'User', value: `${interaction.member.user.tag} (\`${interaction.member.id}\`)` }
+    ]);
+    await interaction.reply({ content: '✅ You are verified. Enjoy!', ephemeral: true });
   }
 });
 
@@ -276,6 +292,11 @@ client.on('messageCreate', async (message) => {
     const amount = Math.min(parseInt(args[0]) || 0, 100);
     if (amount <= 0) return message.reply('Usage: `,clear 50` (max 100)');
     const deleted = await message.channel.bulkDelete(amount, true);
+    await logAction(message.guild, 'Clear', 0x1e1e2e, [
+      { name: 'Channel', value: `#${message.channel.name}` },
+      { name: 'By', value: `${message.author.tag}` },
+      { name: 'Messages Deleted', value: `${deleted.size}` }
+    ]);
     message.channel.send(`🗑️ ${deleted.size}`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
   }
@@ -347,6 +368,11 @@ client.on('messageCreate', async (message) => {
     const newNick = args.slice(1).join(' ');
     if (!newNick) return message.reply('Usage: `,nick @user NewName`');
     await member.setNickname(newNick);
+    await logAction(message.guild, 'Nickname Changed', 0x1e1e2e, [
+      { name: 'User', value: `${member.user.tag}` },
+      { name: 'New Nick', value: newNick },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`✅ Nickname changed to \`${newNick}\`.`);
   }
 
@@ -365,6 +391,10 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
     await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false });
+    await logAction(message.guild, 'Channel Locked', 0x1e1e2e, [
+      { name: 'Channel', value: `#${message.channel.name}` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`🔒 \`${message.channel.name}\` locked.`);
   }
 
@@ -373,6 +403,10 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
     await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null });
+    await logAction(message.guild, 'Channel Unlocked', 0x1e1e2e, [
+      { name: 'Channel', value: `#${message.channel.name}` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`🔓 \`${message.channel.name}\` unlocked.`);
   }
 
@@ -409,6 +443,12 @@ client.on('messageCreate', async (message) => {
         count++;
       } catch {}
     }
+    await logAction(message.guild, 'Permission Changed', 0x1e1e2e, [
+      { name: 'Role', value: `@${targetRole.name}` },
+      { name: 'Permission', value: `${perm} → ${action}` },
+      { name: 'Scope', value: `All channels (${count})` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.channel.send(`✅ Set \`${perm}\` to **${action}** for @${targetRole.name} on **${count}** channels.`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
@@ -449,6 +489,12 @@ client.on('messageCreate', async (message) => {
     if (!channel) return message.reply('❌ Channel not found.');
 
     await channel.permissionOverwrites.edit(targetRole, { [permKey]: action === 'deny' ? false : true });
+    await logAction(message.guild, 'Permission Changed', 0x1e1e2e, [
+      { name: 'Role', value: `@${targetRole.name}` },
+      { name: 'Permission', value: `${perm} → ${action}` },
+      { name: 'Channel', value: `#${channel.name}` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`✅ \`${channel.name}\` → @${targetRole.name} → ${action} ${perm}`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
@@ -463,6 +509,11 @@ client.on('messageCreate', async (message) => {
     const channel = message.guild.channels.cache.get(channelId);
     if (!channel) return message.reply('❌ Channel not found.');
     await channel.setName(newName);
+    await logAction(message.guild, 'Channel Renamed', 0x1e1e2e, [
+      { name: 'Old Name', value: channel.name },
+      { name: 'New Name', value: newName },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`✅ Renamed to \`${newName}\``)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
@@ -568,6 +619,93 @@ client.on('messageCreate', async (message) => {
       .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
   }
 
+  // ─── REMINDER ───
+  if (cmd === 'remind') {
+    const timeStr = args[0];
+    const text = args.slice(1).join(' ');
+    if (!timeStr || !text) return message.reply('Usage: `,remind 5m do homework`');
+
+    let ms = 0;
+    const m = timeStr.match(/^(\d+)\s*(m|h|d)$/i);
+    if (!m) return message.reply('Format: `5m`, `2h`, `1d`');
+
+    const amount = parseInt(m[1]);
+    const unit = m[2].toLowerCase();
+    if (unit === 'm') ms = amount * 60000;
+    if (unit === 'h') ms = amount * 3600000;
+    if (unit === 'd') ms = amount * 86400000;
+
+    reminders.push({ userId: message.author.id, time: Date.now() + ms, text });
+
+    setTimeout(() => {
+      client.users.fetch(message.author.id).then(user =>
+        user.send(`⏰ **Reminder:** ${text}`).catch(() => {})
+      );
+    }, ms);
+
+    message.reply(`⏰ Set. I'll DM you in **${timeStr}**.`)
+      .then(m2 => setTimeout(() => m2.delete().catch(() => {}), 1000));
+  }
+
+  // ─── NOTES ───
+  if (cmd === 'note') {
+    const sub = args[0];
+    if (!sub) return message.reply('Usage: `,note add text` / `,note list` / `,note view @user` / `,note del number`');
+
+    const $role = message.guild.roles.cache.find(r => r.name === '$');
+    const isOwner = $role && message.member.roles.cache.has($role.id);
+
+    if (sub === 'add') {
+      const text = args.slice(1).join(' ');
+      if (!text) return message.reply('Usage: `,note add your note here`');
+      if (!notes[message.author.id]) notes[message.author.id] = [];
+      notes[message.author.id].push({ text, date: new Date().toISOString() });
+      saveNotes();
+      message.reply(`📝 Note saved.`)
+        .then(m2 => setTimeout(() => m2.delete().catch(() => {}), 1000));
+    }
+
+    if (sub === 'list') {
+      const target = isOwner && member ? member : message.member;
+      const userNotes = notes[target.id];
+      if (!userNotes || userNotes.length === 0) return message.reply(`No notes for ${target.user.username}.`);
+      const lines = userNotes.map((n, i) => `**${i + 1}.** ${n.text} — <t:${Math.floor(new Date(n.date).getTime() / 1000)}:R>`);
+      const embed = new EmbedBuilder()
+        .setColor(0x1e1e2e)
+        .setTitle(`Notes — ${target.user.username}`)
+        .setDescription(lines.slice(0, 20).join('\n'));
+      if (isOwner && member) {
+        message.channel.send({ embeds: [embed] });
+      } else {
+        message.author.send({ embeds: [embed] }).catch(() => message.reply('❌ DMs closed.'));
+      }
+    }
+
+    if (sub === 'view') {
+      if (!isOwner) return message.reply('❌ Only $ can view others\' notes.');
+      if (!member) return message.reply('Mention a user.');
+      const userNotes = notes[member.id];
+      if (!userNotes || userNotes.length === 0) return message.reply(`No notes for ${member.user.username}.`);
+      const lines = userNotes.map((n, i) => `**${i + 1}.** ${n.text} — <t:${Math.floor(new Date(n.date).getTime() / 1000)}:R>`);
+      const embed = new EmbedBuilder()
+        .setColor(0x1e1e2e)
+        .setTitle(`Notes — ${member.user.username}`)
+        .setDescription(lines.slice(0, 20).join('\n'));
+      message.channel.send({ embeds: [embed] });
+    }
+
+    if (sub === 'del') {
+      const num = parseInt(args[1]);
+      if (isNaN(num)) return message.reply('Usage: `,note del 1`');
+      const target = isOwner && member ? member : message.member;
+      if (!notes[target.id] || num < 1 || num > notes[target.id].length) return message.reply('❌ Invalid note number.');
+      notes[target.id].splice(num - 1, 1);
+      saveNotes();
+      message.reply(`🗑️ Note #${num} deleted.`)
+        .then(m2 => setTimeout(() => m2.delete().catch(() => {}), 1000));
+    }
+  }
+
   // ─── HELP ───
   if (cmd === 'help') {
     const embed = new EmbedBuilder()
@@ -576,7 +714,8 @@ client.on('messageCreate', async (message) => {
       .setDescription('```diff\n+ ban @user reason\n+ unban id\n+ kick @user reason\n+ kickreq @user reason\n+ timeout @user mins\n+ softban @user\n+ unsoftban @user\n+ clear amount\n+ warn @user reason\n+ resetwarns @user\n+ mute @user\n+ unmute @user\n```')
       .addFields(
         { name: '  CHANNELS', value: '```diff\n+ lock\n+ unlock\n+ slowmode secs\n+ renamech id name\n+ setperm @role deny/allow perm\n+ setpermch @role id deny/allow perm\n```' },
-        { name: '  INFO', value: '```diff\n+ userinfo [@user]\n+ serverinfo\n+ sendwelcome\n+ sendtrap\n```' }
+        { name: '  INFO', value: '```diff\n+ userinfo [@user]\n+ serverinfo\n+ sendwelcome\n+ sendtrap\n```' },
+        { name: '  USER', value: '```diff\n+ remind 5m text\n+ note add text\n+ note list\n+ note del number\n+ note view @user ($ only)\n```' }
       )
       .setFooter({ text: 'prefix: ,  •  $ = owner  •  mod = limited' });
     message.channel.send({ embeds: [embed] });
