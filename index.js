@@ -598,7 +598,7 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
       return message.reply('❌ You need Manage Messages permission.');
 
-    const trapChannel = message.guild.channels.cache.find(c => c.name === 'do-not-type-here');
+    const trapChannel = message.guild.channels.cache.find(c => c.name === '⛔︴do-not-type-here');
     if (!trapChannel) return message.reply('❌ No `do-not-type-here` channel found.');
 
     const embed = new EmbedBuilder()
