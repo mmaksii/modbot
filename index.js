@@ -278,7 +278,7 @@ if (cmd === 'unsoftban') {
         { name: `,lock` / `,unlock`, value: 'Lock/unlock channel', inline: true },
         { name: `,setperm @role deny/allow perm`, value: 'Bulk set permissions', inline: true },
         { name: `,userinfo [@user]`, value: 'Show user info', inline: true },
-        { name: `,serverinfo`, value: 'Show server stats', inline: true }
+        { name: `,serverinfo`, value: 'Show server stats', inline: true },
         { name: `,softban @user`, value: '7-day timeout', inline: true },
         { name: `,unsoftban @user`, value: 'Remove timeout', inline: true },   
       );
