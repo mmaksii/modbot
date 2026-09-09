@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');   
 
 const client = new Client({
   intents: [
@@ -225,7 +225,7 @@ client.on('messageCreate', async (message) => {
   if (cmd === 'setperm') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
-    const targetRole = message.mentions.roles.first();
+    const targetRole = message.mentions.roles.first() || (args[0] === '@everyone' ? message.guild.roles.everyone : null);      
     if (!targetRole) return message.reply('Usage: `,setperm @role deny sendmessages`');
     const action = args[1];
     const perm = args.slice(2).join(' ').toLowerCase().replace(/\s+/g, '');
@@ -262,12 +262,21 @@ client.on('messageCreate', async (message) => {
 
   // ─── SET PERM (specific channel by ID) ───
   if (cmd === 'setpermch') {
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
-      return message.reply('❌ You need Manage Channels permission.');
-    const targetRole = message.mentions.roles.first();
-    const channelId = args[0];
-    const action = args[1];
-    const perm = args.slice(2).join(' ').toLowerCase().replace(/\s+/g, '');
+  if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
+    return message.reply('❌ You need Manage Channels permission.');
+
+  let targetRole = message.mentions.roles.first();
+  let offset = 0;
+  if (!targetRole && args[0] === '@everyone') {
+    targetRole = message.guild.roles.everyone;
+    offset = 1;
+  }
+  if (!targetRole) return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
+
+  const channelId = args[offset];
+  const action = args[offset + 1];
+  const perm = args.slice(offset + 2).join(' ').toLowerCase().replace(/\s+/g, '');
+  // ... rest stays the same   
 
     if (!targetRole || !channelId || !action || !perm)
       return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
@@ -279,7 +288,10 @@ client.on('messageCreate', async (message) => {
       attachfiles: 'AttachFiles',
       embedlinks: 'EmbedLinks',
       readmessages: 'ViewChannel',
+      viewchannels: 'ViewChannel',
       sendmessagesinthreads: 'SendMessagesInThreads',
+};   
+};   
     };
 
     const permKey = permMap[perm];
@@ -370,8 +382,16 @@ client.on('messageCreate', async (message) => {
       .setFooter({ text: 'Mute → Warn → Kick → Ban. Pushing boundaries = same punishment as breaking the rule.' });
 
     await message.channel.send({ embeds: [welcomeEmbed] });
-    const rulesMsg = await message.channel.send({ embeds: [rulesEmbed] });
-    await rulesMsg.pin().catch(() => {});
+    const verifyButton = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+    .setCustomId('verify')
+    .setLabel('Verify')
+    .setEmoji('✅')
+    .setStyle(ButtonStyle.Success)
+);
+
+   const rulesMsg = await message.channel.send({ embeds: [rulesEmbed], components: [verifyButton] });
+   await rulesMsg.pin().catch(() => {});      
     message.reply('✅ Sent and pinned.')
       .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
   }
@@ -416,7 +436,21 @@ client.on('messageCreate', async (message) => {
     message.channel.send({ embeds: [embed] });
   }
 });
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
 
+  if (interaction.customId === 'verify') {
+    const verifiedRole = interaction.guild.roles.cache.find(r => r.name === 'verified');
+    if (!verifiedRole) return interaction.reply({ content: '❌ No `verified` role found.', ephemeral: true });
+
+    if (interaction.member.roles.cache.has(verifiedRole.id)) {
+      return interaction.reply({ content: '✅ You are already verified.', ephemeral: true });
+    }
+
+    await interaction.member.roles.add(verifiedRole);
+    await interaction.update({ content: '✅ You are verified. Enjoy!', components: [] });
+  }
+});   
 client.once('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
