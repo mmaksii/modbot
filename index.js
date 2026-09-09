@@ -13,13 +13,25 @@ const prefix = ',';
 const warns = new Map();
 
 // ─── AUTO-MOD ───
-const badWords = ['badword1', 'badword2']; // ← add your own here
+const badWords = ['badword1', 'badword2']; // ← edit these
 const inviteRegex = /discord(?:\.gg|app\.com\/invite)\/\w+/i;
 
+// ─── TRAP CHANNEL ───
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // Auto-mod (runs on ALL messages, not just prefix commands)
+  // Trap channel (auto-ban)
+  if (message.channel.name === 'do-not-type-here') {
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      await message.delete().catch(() => {});
+      try {
+        await message.member.ban({ reason: `Typed in trap channel. ID: ${message.author.id}` });
+      } catch {}
+      return;
+    }
+  }
+
+  // Auto-mod
   if (badWords.some(w => message.content.toLowerCase().includes(w)) || inviteRegex.test(message.content)) {
     await message.delete().catch(() => {});
     message.channel.send(`⚠️ @${message.author.username} — your message was removed (banned word / invite link).`)
@@ -33,7 +45,7 @@ client.on('messageCreate', async (message) => {
   const cmd = args.shift().toLowerCase();
   const member = message.mentions.members.first();
 
-  if (!member && ['ban', 'kick', 'timeout', 'warn', 'unmute', 'mute', 'nick', 'resetwarns', 'softban', 'unsoftban'].includes(cmd)) {    
+  if (!member && ['ban', 'kick', 'timeout', 'warn', 'unmute', 'mute', 'nick', 'resetwarns', 'softban', 'unsoftban'].includes(cmd)) {
     return message.reply('Please mention a user.');
   }
 
@@ -66,6 +78,26 @@ client.on('messageCreate', async (message) => {
     message.reply(`👢 ${member.user.tag} has been kicked.`);
   }
 
+  // ─── KICK REQUEST ───
+  if (cmd === 'kickreq') {
+    if (!message.member.permissions.has(PermissionFlagsBits.KickMembers))
+      return message.reply('❌ You need Kick Members permission.');
+    const reason = args.slice(1).join(' ') || 'No reason';
+    const kickChannel = message.guild.channels.cache.find(c => c.name === 'kick-requests');
+    if (!kickChannel) return message.reply('❌ No `kick-requests` channel found.');
+    const embed = new EmbedBuilder()
+      .setColor(0x991b1b)
+      .setTitle('👢 Kick Request')
+      .addFields(
+        { name: 'Target', value: `${member.user.tag} (\`${member.id}\`)` },
+        { name: 'Requested by', value: `${message.author.tag}` },
+        { name: 'Reason', value: reason }
+      )
+      .setTimestamp();
+    kickChannel.send({ embeds: [embed] });
+    message.reply(`✅ Kick request sent to #kick-requests.`);
+  }
+
   // ─── TIMEOUT ───
   if (cmd === 'timeout') {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
@@ -76,31 +108,31 @@ client.on('messageCreate', async (message) => {
     message.reply(`⏰ ${member.user.tag} timed out for ${mins} min.`);
   }
 
-  // ─── CLEAR (auto-deletes confirmation) ───
+  // ─── SOFTBAN ───
+  if (cmd === 'softban') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+      return message.reply('❌ You need Moderate Members permission.');
+    await member.timeout(7 * 24 * 60 * 60 * 1000, 'Softbanned');
+    message.reply(`🔒 ${member.user.tag} has been softbanned for 7 days.`);
+  }
+
+  // ─── UNSOFTBAN ───
+  if (cmd === 'unsoftban') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+      return message.reply('❌ You need Moderate Members permission.');
+    await member.timeout(null);
+    message.reply(`✅ ${member.user.tag} has been unsoftbanned.`);
+  }
+
+  // ─── CLEAR ───
   if (cmd === 'clear') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
       return message.reply('❌ You need Manage Messages permission.');
     const amount = Math.min(parseInt(args[0]) || 0, 100);
     if (amount <= 0) return message.reply('Usage: `,clear 50` (max 100)');
     const deleted = await message.channel.bulkDelete(amount, true);
-    message.channel.send(`🗑️ Deleted ${deleted.size} messages.`)
-      .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-
-      // ─── SOFTBAN (7-day timeout) ───
-if (cmd === 'softban') {
-  if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
-    return message.reply('❌ You need Moderate Members permission.');
-  await member.timeout(7 * 24 * 60 * 60 * 1000, 'Softbanned');
-  message.reply(`🔒 ${member.user.tag} has been softbanned for 7 days.`);
-}
-
-// ─── UNSOFTBAN ───
-if (cmd === 'unsoftban') {
-  if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
-    return message.reply('❌ You need Moderate Members permission.');
-  await member.timeout(null);
-  message.reply(`✅ ${member.user.tag} has been unsoftbanned.`);
-}   
+    message.channel.send(`🗑️ ${deleted.size}`)
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
   }
 
   // ─── WARN ───
@@ -189,7 +221,7 @@ if (cmd === 'unsoftban') {
     message.reply(`🔓 \`${message.channel.name}\` is unlocked.`);
   }
 
-  // ─── SET PERMISSION ON ALL CHANNELS ───
+  // ─── SET PERM (all channels) ───
   if (cmd === 'setperm') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
@@ -210,7 +242,7 @@ if (cmd === 'unsoftban') {
     };
 
     const permKey = permMap[perm];
-    if (!permKey) return message.reply(`❌ Unknown permission. Options: ${Object.keys(permMap).join(', ')}`);
+    if (!permKey) return message.reply(`❌ Unknown. Options: ${Object.keys(permMap).join(', ')}`);
 
     const channels = message.guild.channels.cache.filter(c => c.type === 0);
     let count = 0;
@@ -225,7 +257,56 @@ if (cmd === 'unsoftban') {
     }
 
     message.channel.send(`✅ Set \`${perm}\` to **${action}** for @${targetRole.name} on **${count}** channels.`)
-      .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
+  }
+
+  // ─── SET PERM (specific channel by ID) ───
+  if (cmd === 'setpermch') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
+      return message.reply('❌ You need Manage Channels permission.');
+    const targetRole = message.mentions.roles.first();
+    const channelId = args[0];
+    const action = args[1];
+    const perm = args.slice(2).join(' ').toLowerCase().replace(/\s+/g, '');
+
+    if (!targetRole || !channelId || !action || !perm)
+      return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
+
+    const permMap = {
+      sendmessages: 'SendMessages',
+      speak: 'Speak',
+      addreactions: 'AddReactions',
+      attachfiles: 'AttachFiles',
+      embedlinks: 'EmbedLinks',
+      readmessages: 'ViewChannel',
+      sendmessagesinthreads: 'SendMessagesInThreads',
+    };
+
+    const permKey = permMap[perm];
+    if (!permKey) return message.reply(`❌ Unknown. Options: ${Object.keys(permMap).join(', ')}`);
+
+    const channel = message.guild.channels.cache.get(channelId);
+    if (!channel) return message.reply('❌ Channel not found.');
+
+    await channel.permissionOverwrites.edit(targetRole, {
+      [permKey]: action === 'deny' ? false : true
+    });
+    message.reply(`✅ \`${channel.name}\` → @${targetRole.name} → ${action} ${perm}`)
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
+  }
+
+  // ─── RENAME CHANNEL ───
+  if (cmd === 'renamech') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
+      return message.reply('❌ You need Manage Channels permission.');
+    const channelId = args[0];
+    const newName = args.slice(1).join(' ');
+    if (!channelId || !newName) return message.reply('Usage: `,renamech 123456789 new-name`');
+    const channel = message.guild.channels.cache.get(channelId);
+    if (!channel) return message.reply('❌ Channel not found.');
+    await channel.setName(newName);
+    message.reply(`✅ Renamed to \`${newName}\``)
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
 
   // ─── USER INFO ───
@@ -258,30 +339,80 @@ if (cmd === 'unsoftban') {
     message.channel.send({ embeds: [embed] });
   }
 
+  // ─── SEND WELCOME ───
+  if (cmd === 'sendwelcome') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ You need Manage Messages permission.');
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor(0x1e1e2e)
+      .setTitle('Welcome to the server!')
+      .setDescription(
+        `We're glad you're here. Before you start, take a moment to read the rules below.\n` +
+        `By staying in this server, you agree to follow them.\n\n` +
+        `Enjoy your stay.`
+      );
+
+    const rulesEmbed = new EmbedBuilder()
+      .setColor(0x27272a)
+      .setTitle('Rules')
+      .setDescription(
+        `**1.** Be respectful — treat others the way you want to be treated.\n` +
+        `**2.** No inappropriate language — profanity kept to a minimum, no slurs or targeted harassment.\n` +
+        `**3.** No spamming — don't flood channels with repeated messages.\n` +
+        `**4.** No NSFW content — this is not the place for it.\n` +
+        `**5.** No advertising or self-promo — post your content in the designated channel only if it adds value.\n` +
+        `**6.** No offensive names or avatars — staff will ask you to change them if needed.\n` +
+        `**7.** No raiding or mentioning raiding.\n` +
+        `**8.** No threats — DDoS, doxxing, death threats, or any form of intimidation is a permanent ban.\n` +
+        `**9.** Follow Discord's [Community Guidelines](https://discord.com/guidelines) and [Terms of Service](https://discord.com/terms).`
+      )
+      .setFooter({ text: 'Mute → Warn → Kick → Ban. Pushing boundaries = same punishment as breaking the rule.' });
+
+    await message.channel.send({ embeds: [welcomeEmbed] });
+    const rulesMsg = await message.channel.send({ embeds: [rulesEmbed] });
+    await rulesMsg.pin().catch(() => {});
+    message.reply('✅ Sent and pinned.')
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
+  }
+
+  // ─── SEND TRAP ───
+  if (cmd === 'sendtrap') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
+      return message.reply('❌ You need Manage Messages permission.');
+
+    const trapChannel = message.guild.channels.cache.find(c => c.name === 'do-not-type-here');
+    if (!trapChannel) return message.reply('❌ No `do-not-type-here` channel found.');
+
+    const embed = new EmbedBuilder()
+      .setColor(0x1e1e2e)
+      .setDescription(
+        `⚠️ **DO NOT SEND ANY MESSAGES HERE. YOU WILL BE IRREVERSIBLY BANNED.** 🔨\n` +
+        `\n` +
+        `🚫 **THIS IS A TRAP FOR COMPROMISED ACCOUNTS.**\n` +
+        `\n` +
+        `ℹ️ Messages posted here will be **automatically deleted**, and the sender will be **automatically banned**.\n` +
+        `\n` +
+        `YOU HAVE BEEN WARNED. INTENTIONALLY SENDING MESSAGES WILL GET YOU BANNED WITH NO APPEALS.`
+      );
+
+    const msg = await trapChannel.send({ embeds: [embed] });
+    await msg.pin().catch(() => {});
+    message.reply(`✅ Trap message posted in #do-not-type-here.`)
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
+  }
+
   // ─── HELP ───
   if (cmd === 'help') {
     const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setTitle('📋 Mod Bot Commands')
+      .setColor(0x1e1e2e)
+      .setTitle('  MODERATION')
+      .setDescription('```diff\n+ ban @user reason\n+ unban id\n+ kick @user reason\n+ kickreq @user reason\n+ timeout @user mins\n+ softban @user\n+ unsoftban @user\n+ clear amount\n+ warn @user reason\n+ resetwarns @user\n+ mute @user\n+ unmute @user\n```')
       .addFields(
-        { name: `,ban @user reason`, value: 'Ban a member', inline: true },
-        { name: `,unban userID`, value: 'Unban a member', inline: true },
-        { name: `,kick @user reason`, value: 'Kick a member', inline: true },
-        { name: `,timeout @user mins`, value: 'Timeout a member', inline: true },
-        { name: `,clear amount`, value: 'Delete messages (max 100)', inline: true },
-        { name: `,warn @user reason`, value: 'Warn a member', inline: true },
-        { name: `,resetwarns @user`, value: 'Reset warnings', inline: true },
-        { name: `,mute @user`, value: 'Mute (muted role)', inline: true },
-        { name: `,unmute @user`, value: 'Unmute', inline: true },
-        { name: `,nick @user name`, value: 'Change nickname', inline: true },
-        { name: `,slowmode secs`, value: 'Set slowmode', inline: true },
-        { name: `,lock / ,unlock`, value: 'Lock/unlock channel', inline: true },   
-        { name: `,setperm @role deny/allow perm`, value: 'Bulk set permissions', inline: true },
-        { name: `,userinfo [@user]`, value: 'Show user info', inline: true },
-        { name: `,serverinfo`, value: 'Show server stats', inline: true },
-        { name: `,softban @user`, value: '7-day timeout', inline: true },
-        { name: `,unsoftban @user`, value: 'Remove timeout', inline: true },   
-      );
+        { name: '  CHANNELS', value: '```diff\n+ lock\n+ unlock\n+ slowmode secs\n+ renamech id name\n+ setperm @role deny/allow perm\n+ setpermch @role id deny/allow perm\n```' },
+        { name: '  INFO', value: '```diff\n+ userinfo [@user]\n+ serverinfo\n+ sendwelcome\n+ sendtrap\n```' }
+      )
+      .setFooter({ text: 'prefix: ,  •  $ = owner  •  mod = limited' });
     message.channel.send({ embeds: [embed] });
   }
 });
