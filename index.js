@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');   
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -6,27 +6,137 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildInvites,
   ],
 });
 
 const prefix = ',';
 const warns = new Map();
+const inviteCache = new Map();
 
 // ─── AUTO-MOD ───
-const badWords = ['badword1', 'badword2']; // ← edit these
+const badWords = ['badword1', 'badword2'];
 const inviteRegex = /discord(?:\.gg|app\.com\/invite)\/\w+/i;
 
-// ─── TRAP CHANNEL ───
+// ─── LOG HELPER ───
+async function logAction(guild, title, color, fields) {
+  const logChannel = guild.channels.cache.find(c => c.name === 'staff-log');
+  if (!logChannel) return;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .addFields(fields)
+    .setTimestamp();
+  logChannel.send({ embeds: [embed] });
+}
+
+// ─── INVITE TRACKER INIT ───
+client.on('clientReady', async () => {
+  const guild = client.guilds.cache.first();
+  if (!guild) return;
+  try {
+    const invites = await guild.invites.fetch();
+    invites.forEach(inv => inviteCache.set(inv.code, inv.uses));
+  } catch {}
+});
+
+// ─── STAFF LOG: KICKS / BANS ───
+client.on('guildMemberRemove', async (member) => {
+  const guild = member.guild;
+  const logChannel = guild.channels.cache.find(c => c.name === 'staff-log');
+  if (!logChannel) return;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x991b1b)
+    .setTitle('Member Removed')
+    .setThumbnail(member.user.displayAvatarURL())
+    .addFields(
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'Joined', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` }
+    )
+    .setTimestamp();
+
+  logChannel.send({ embeds: [embed] });
+});
+
+// ─── STAFF LOG: JOINS + INVITE TRACKER ───
+client.on('guildMemberAdd', async (member) => {
+  const guild = member.guild;
+  const logChannel = guild.channels.cache.find(c => c.name === 'staff-log');
+  if (!logChannel) return;
+
+  let inviter = 'Unknown (no invite / direct link)';
+  try {
+    const invites = await guild.invites.fetch();
+    for (const [code, invite] of invites) {
+      const oldUses = inviteCache.get(code) || 0;
+      if (invite.uses > oldUses) {
+        const inviterUser = guild.members.cache.get(invite.inviter?.id);
+        inviter = inviterUser ? `${inviterUser.user.tag} (\`${inviterUser.id}\`)` : `Unknown (\`${invite.inviter?.id}\`)`;
+        inviteCache.set(code, invite.uses);
+        break;
+      }
+    }
+  } catch {}
+
+  const ageMs = Date.now() - member.user.createdTimestamp;
+  const ageDays = Math.floor(ageMs / 86400000);
+  const ageStr = ageDays < 1 ? `${Math.floor(ageMs / 3600000)}h` : `${ageDays}d`;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1e1e2e)
+    .setTitle('Member Joined')
+    .setThumbnail(member.user.displayAvatarURL())
+    .addFields(
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'Account Age', value: ageStr, inline: true },
+      { name: 'Invited By', value: inviter, inline: true }
+    )
+    .setTimestamp();
+
+  logChannel.send({ embeds: [embed] });
+
+  if (ageDays < 7) {
+    const warnEmbed = new EmbedBuilder()
+      .setColor(0x991b1b)
+      .setDescription(`⚠️ **New account** — ${member.user.tag} is only **${ageStr}** old. Monitor.`);
+    logChannel.send({ embeds: [warnEmbed] });
+  }
+});
+
+// ─── VERIFY BUTTON ───
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  if (interaction.customId === 'verify') {
+    const verifiedRole = interaction.guild.roles.cache.find(r => r.name === 'verified');
+    if (!verifiedRole) return interaction.reply({ content: '❌ No `verified` role found.', ephemeral: true });
+
+    if (interaction.member.roles.cache.has(verifiedRole.id)) {
+      return interaction.reply({ content: '✅ Already verified.', ephemeral: true });
+    }
+
+    await interaction.member.roles.add(verifiedRole);
+    await interaction.update({ content: '✅ You are verified. Enjoy!', components: [] });
+  }
+});
+
+// ─── MESSAGE HANDLER ───
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
+  if (!message.guild) return;
 
-  // Trap channel (auto-ban)
+  // Trap channel
   if (message.channel.name === 'do-not-type-here') {
     if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
       await message.delete().catch(() => {});
       try {
-        await message.member.ban({ reason: `Typed in trap channel. ID: ${message.author.id}` });
+        await message.member.ban({ reason: `Trap channel. ID: ${message.author.id}` });
       } catch {}
+      await logAction(message.guild, 'Trap Channel Ban', 0x991b1b, [
+        { name: 'User', value: `${message.author.tag} (\`${message.author.id}\`)` },
+        { name: 'Reason', value: 'Typed in trap channel' }
+      ]);
       return;
     }
   }
@@ -34,8 +144,13 @@ client.on('messageCreate', async (message) => {
   // Auto-mod
   if (badWords.some(w => message.content.toLowerCase().includes(w)) || inviteRegex.test(message.content)) {
     await message.delete().catch(() => {});
-    message.channel.send(`⚠️ @${message.author.username} — your message was removed (banned word / invite link).`)
+    message.channel.send(`⚠️ @${message.author.username} — message removed (banned word / invite link).`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+    await logAction(message.guild, 'Auto-Mod Triggered', 0x991b1b, [
+      { name: 'User', value: `${message.author.tag} (\`${message.author.id}\`)` },
+      { name: 'Channel', value: `#${message.channel.name}` },
+      { name: 'Content', value: message.content.slice(0, 200) || '(empty)' }
+    ]);
     return;
   }
 
@@ -45,7 +160,7 @@ client.on('messageCreate', async (message) => {
   const cmd = args.shift().toLowerCase();
   const member = message.mentions.members.first();
 
-  if (!member && ['ban', 'kick', 'timeout', 'warn', 'unmute', 'mute', 'nick', 'resetwarns', 'softban', 'unsoftban'].includes(cmd)) {
+  if (!member && ['ban', 'kick', 'timeout', 'warn', 'unmute', 'mute', 'nick', 'resetwarns', 'softban', 'unsoftban', 'kickreq'].includes(cmd)) {
     return message.reply('Please mention a user.');
   }
 
@@ -55,6 +170,11 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ You need Ban Members permission.');
     const reason = args.slice(1).join(' ') || 'No reason';
     await member.ban({ reason });
+    await logAction(message.guild, 'Ban', 0x991b1b, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` },
+      { name: 'Reason', value: reason }
+    ]);
     message.reply(`🔨 ${member.user.tag} has been banned.`);
   }
 
@@ -65,8 +185,14 @@ client.on('messageCreate', async (message) => {
     const userId = args[0];
     if (!userId || isNaN(userId)) return message.reply('Usage: `,unban 123456789012345678`');
     await message.guild.members.unban(userId, args.slice(1).join(' ') || 'Unbanned')
-      .then(() => message.reply(`✅ User \`${userId}\` has been unbanned.`))
-      .catch(() => message.reply('❌ Could not unban. Invalid ID or already unbanned.'));
+      .then(() => {
+        logAction(message.guild, 'Unban', 0x1e1e2e, [
+          { name: 'User', value: `\`${userId}\`` },
+          { name: 'By', value: `${message.author.tag}` }
+        ]);
+        message.reply(`✅ User \`${userId}\` has been unbanned.`);
+      })
+      .catch(() => message.reply('❌ Could not unban.'));
   }
 
   // ─── KICK ───
@@ -75,6 +201,11 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ You need Kick Members permission.');
     const reason = args.slice(1).join(' ') || 'No reason';
     await member.kick(reason);
+    await logAction(message.guild, 'Kick', 0x991b1b, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` },
+      { name: 'Reason', value: reason }
+    ]);
     message.reply(`👢 ${member.user.tag} has been kicked.`);
   }
 
@@ -105,6 +236,12 @@ client.on('messageCreate', async (message) => {
     const mins = parseInt(args[1]);
     if (isNaN(mins)) return message.reply('Usage: `,timeout @user 10`');
     await member.timeout(mins * 60000, args.slice(2).join(' ') || 'Timed out');
+    await logAction(message.guild, 'Timeout', 0xffa500, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` },
+      { name: 'Duration', value: `${mins} min` },
+      { name: 'Reason', value: args.slice(2).join(' ') || 'No reason' }
+    ]);
     message.reply(`⏰ ${member.user.tag} timed out for ${mins} min.`);
   }
 
@@ -113,6 +250,10 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
       return message.reply('❌ You need Moderate Members permission.');
     await member.timeout(7 * 24 * 60 * 60 * 1000, 'Softbanned');
+    await logAction(message.guild, 'Softban (7d)', 0x991b1b, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`🔒 ${member.user.tag} has been softbanned for 7 days.`);
   }
 
@@ -121,6 +262,10 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers))
       return message.reply('❌ You need Moderate Members permission.');
     await member.timeout(null);
+    await logAction(message.guild, 'Unsoftban', 0x1e1e2e, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`✅ ${member.user.tag} has been unsoftbanned.`);
   }
 
@@ -142,6 +287,12 @@ client.on('messageCreate', async (message) => {
     const reason = args.slice(1).join(' ') || 'No reason';
     const count = (warns.get(member.id) || 0) + 1;
     warns.set(member.id, count);
+    await logAction(message.guild, 'Warn', 0xffa500, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` },
+      { name: 'Warning #', value: `${count}` },
+      { name: 'Reason', value: reason }
+    ]);
     const embed = new EmbedBuilder()
       .setColor(0xffa500)
       .setTitle(`⚠️ Warning #${count}`)
@@ -166,8 +317,12 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles))
       return message.reply('❌ You need Manage Roles permission.');
     let mutedRole = message.guild.roles.cache.find(r => r.name === 'muted');
-    if (!mutedRole) return message.reply('❌ No "muted" role found. Create one first.');
+    if (!mutedRole) return message.reply('❌ No "muted" role found.');
     await member.roles.add(mutedRole);
+    await logAction(message.guild, 'Mute', 0xffa500, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`🔇 ${member.user.tag} has been muted.`);
   }
 
@@ -178,6 +333,10 @@ client.on('messageCreate', async (message) => {
     let mutedRole = message.guild.roles.cache.find(r => r.name === 'muted');
     if (!mutedRole) return message.reply('❌ No "muted" role found.');
     await member.roles.remove(mutedRole);
+    await logAction(message.guild, 'Unmute', 0x1e1e2e, [
+      { name: 'User', value: `${member.user.tag} (\`${member.id}\`)` },
+      { name: 'By', value: `${message.author.tag}` }
+    ]);
     message.reply(`🔊 ${member.user.tag} has been unmuted.`);
   }
 
@@ -196,36 +355,33 @@ client.on('messageCreate', async (message) => {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
     const secs = parseInt(args[0]);
-    if (isNaN(secs) || secs < 0) return message.reply('Usage: `,slowmode 5` (seconds, 0 to disable)');
+    if (isNaN(secs) || secs < 0) return message.reply('Usage: `,slowmode 5` (0 to disable)');
     await message.channel.setRateLimitPerUser(secs);
-    message.reply(`⏱️ Slowmode set to ${secs}s in this channel.`);
+    message.reply(`⏱️ Slowmode set to ${secs}s.`);
   }
 
   // ─── LOCK ───
   if (cmd === 'lock') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
-    await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
-      SendMessages: false
-    });
-    message.reply(`🔒 \`${message.channel.name}\` is locked.`);
+    await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false });
+    message.reply(`🔒 \`${message.channel.name}\` locked.`);
   }
 
   // ─── UNLOCK ───
   if (cmd === 'unlock') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
-    await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, {
-      SendMessages: null
-    });
-    message.reply(`🔓 \`${message.channel.name}\` is unlocked.`);
+    await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null });
+    message.reply(`🔓 \`${message.channel.name}\` unlocked.`);
   }
 
   // ─── SET PERM (all channels) ───
   if (cmd === 'setperm') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
       return message.reply('❌ You need Manage Channels permission.');
-    const targetRole = message.mentions.roles.first() || (args[0] === '@everyone' ? message.guild.roles.everyone : null);      
+    let targetRole = message.mentions.roles.first();
+    if (!targetRole && args[0] === '@everyone') targetRole = message.guild.roles.everyone;
     if (!targetRole) return message.reply('Usage: `,setperm @role deny sendmessages`');
     const action = args[1];
     const perm = args.slice(2).join(' ').toLowerCase().replace(/\s+/g, '');
@@ -238,6 +394,7 @@ client.on('messageCreate', async (message) => {
       attachfiles: 'AttachFiles',
       embedlinks: 'EmbedLinks',
       readmessages: 'ViewChannel',
+      viewchannels: 'ViewChannel',
       sendmessagesinthreads: 'SendMessagesInThreads',
     };
 
@@ -246,40 +403,33 @@ client.on('messageCreate', async (message) => {
 
     const channels = message.guild.channels.cache.filter(c => c.type === 0);
     let count = 0;
-
     for (const channel of channels.values()) {
       try {
-        await channel.permissionOverwrites.edit(targetRole, {
-          [permKey]: action === 'deny' ? false : true
-        });
+        await channel.permissionOverwrites.edit(targetRole, { [permKey]: action === 'deny' ? false : true });
         count++;
       } catch {}
     }
-
     message.channel.send(`✅ Set \`${perm}\` to **${action}** for @${targetRole.name} on **${count}** channels.`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
 
-  // ─── SET PERM (specific channel by ID) ───
+  // ─── SET PERM (specific channel) ───
   if (cmd === 'setpermch') {
-  if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
-    return message.reply('❌ You need Manage Channels permission.');
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels))
+      return message.reply('❌ You need Manage Channels permission.');
 
-  let targetRole = message.mentions.roles.first();
-  let offset = 0;
-  if (!targetRole && args[0] === '@everyone') {
-    targetRole = message.guild.roles.everyone;
-    offset = 1;
-  }
-  if (!targetRole) return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
+    let targetRole = message.mentions.roles.first();
+    let offset = 0;
+    if (!targetRole && args[0] === '@everyone') {
+      targetRole = message.guild.roles.everyone;
+      offset = 1;
+    }
+    if (!targetRole) return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
 
-  const channelId = args[offset];
-  const action = args[offset + 1];
-  const perm = args.slice(offset + 2).join(' ').toLowerCase().replace(/\s+/g, '');
-  // ... rest stays the same   
-
-    if (!targetRole || !channelId || !action || !perm)
-      return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
+    const channelId = args[offset];
+    const action = args[offset + 1];
+    const perm = args.slice(offset + 2).join(' ').toLowerCase().replace(/\s+/g, '');
+    if (!channelId || !action || !perm) return message.reply('Usage: `,setpermch @role 123456789 deny sendmessages`');
 
     const permMap = {
       sendmessages: 'SendMessages',
@@ -290,16 +440,15 @@ client.on('messageCreate', async (message) => {
       readmessages: 'ViewChannel',
       viewchannels: 'ViewChannel',
       sendmessagesinthreads: 'SendMessagesInThreads',
-    };      
+    };
+
     const permKey = permMap[perm];
     if (!permKey) return message.reply(`❌ Unknown. Options: ${Object.keys(permMap).join(', ')}`);
 
     const channel = message.guild.channels.cache.get(channelId);
     if (!channel) return message.reply('❌ Channel not found.');
 
-    await channel.permissionOverwrites.edit(targetRole, {
-      [permKey]: action === 'deny' ? false : true
-    });
+    await channel.permissionOverwrites.edit(targetRole, { [permKey]: action === 'deny' ? false : true });
     message.reply(`✅ \`${channel.name}\` → @${targetRole.name} → ${action} ${perm}`)
       .then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
   }
@@ -322,7 +471,7 @@ client.on('messageCreate', async (message) => {
   if (cmd === 'userinfo') {
     const target = member || message.member;
     const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
+      .setColor(0x1e1e2e)
       .setAuthor({ name: target.user.username, iconURL: target.user.displayAvatarURL() })
       .setThumbnail(target.user.displayAvatarURL({ size: 256 }))
       .addFields(
@@ -336,7 +485,7 @@ client.on('messageCreate', async (message) => {
   // ─── SERVER INFO ───
   if (cmd === 'serverinfo') {
     const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
+      .setColor(0x1e1e2e)
       .setTitle(message.guild.name)
       .setThumbnail(message.guild.iconURL())
       .addFields(
@@ -378,17 +527,17 @@ client.on('messageCreate', async (message) => {
       )
       .setFooter({ text: 'Mute → Warn → Kick → Ban. Pushing boundaries = same punishment as breaking the rule.' });
 
-    await message.channel.send({ embeds: [welcomeEmbed] });
     const verifyButton = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-    .setCustomId('verify')
-    .setLabel('Verify')
-    .setEmoji('✅')
-    .setStyle(ButtonStyle.Success)
-);
+        .setCustomId('verify')
+        .setLabel('Verify')
+        .setEmoji('✅')
+        .setStyle(ButtonStyle.Success)
+    );
 
-   const rulesMsg = await message.channel.send({ embeds: [rulesEmbed], components: [verifyButton] });
-   await rulesMsg.pin().catch(() => {});      
+    await message.channel.send({ embeds: [welcomeEmbed] });
+    const rulesMsg = await message.channel.send({ embeds: [rulesEmbed], components: [verifyButton] });
+    await rulesMsg.pin().catch(() => {});
     message.reply('✅ Sent and pinned.')
       .then(m => setTimeout(() => m.delete().catch(() => {}), 1000));
   }
@@ -433,21 +582,7 @@ client.on('messageCreate', async (message) => {
     message.channel.send({ embeds: [embed] });
   }
 });
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
 
-  if (interaction.customId === 'verify') {
-    const verifiedRole = interaction.guild.roles.cache.find(r => r.name === 'verified');
-    if (!verifiedRole) return interaction.reply({ content: '❌ No `verified` role found.', ephemeral: true });
-
-    if (interaction.member.roles.cache.has(verifiedRole.id)) {
-      return interaction.reply({ content: '✅ You are already verified.', ephemeral: true });
-    }
-
-    await interaction.member.roles.add(verifiedRole);
-    await interaction.update({ content: '✅ You are verified. Enjoy!', components: [] });
-  }
-});   
 client.once('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
